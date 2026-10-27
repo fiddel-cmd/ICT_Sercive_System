@@ -20,5 +20,6 @@ from rooms.views import study_room_list
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('', study_room_list, name='home'),
     path('rooms/', study_room_list, name='study_room_list'),
 ]

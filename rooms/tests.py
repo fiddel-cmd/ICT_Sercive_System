@@ -5,6 +5,12 @@ from .models import StudyRoom
 
 
 class StudyRoomListTests(TestCase):
+    def test_homepage_shows_the_study_room_directory(self):
+        response = self.client.get(reverse('home'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Study rooms')
+
     def test_room_list_shows_active_rooms(self):
         StudyRoom.objects.create(
             name='North Study Room',
