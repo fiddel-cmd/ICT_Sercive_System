@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Study rooms</title>
+</head>
+<body>
+    <main>
+        <h1>Study rooms</h1>
+        <p>Browse the study rooms available on campus.</p>
+
+        {% if rooms %}
+            <ul>
+                {% for room in rooms %}
+                    <li>
+                        <h2>{{ room.name }}</h2>
+                        <p>{{ room.location }} · Capacity: {{ room.capacity }}</p>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p>No study rooms are listed yet.</p>
+        {% endif %}
+    </main>
+</body>
+</html>
