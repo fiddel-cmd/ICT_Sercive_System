@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'incidents',
     'rooms',
+    'timetable_requests',
 ]
 
 MIDDLEWARE = [
