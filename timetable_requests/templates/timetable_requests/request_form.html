@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Submit Timetable Request</title>
+</head>
+<body>
+    <main>
+        <h1>Submit timetable request</h1>
+
+        {% if messages %}
+            <ul>
+                {% for message in messages %}
+                    <li>{{ message }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+
+        <form method="post">
+            {% csrf_token %}
+            {{ form.as_p }}
+            <button type="submit">Submit request</button>
+        </form>
+
+        <p><a href="{% url 'timetable_request_home' %}">Back to timetable requests</a></p>
+    </main>
+</body>
+</html>
