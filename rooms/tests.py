@@ -1,7 +1,7 @@
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import StudyRoom
+from timetable_requests.models import Room
 
 
 class StudyRoomListTests(TestCase):
@@ -12,9 +12,10 @@ class StudyRoomListTests(TestCase):
         self.assertContains(response, 'Study rooms')
 
     def test_room_list_shows_active_rooms(self):
-        StudyRoom.objects.create(
+        Room.objects.create(
+            code='N-101',
             name='North Study Room',
-            location='North Wing',
+            building='North Wing',
             capacity=12,
         )
 
@@ -26,9 +27,10 @@ class StudyRoomListTests(TestCase):
         self.assertContains(response, '12')
 
     def test_room_list_hides_inactive_rooms(self):
-        StudyRoom.objects.create(
+        Room.objects.create(
+            code='S-201',
             name='Closed Study Room',
-            location='South Wing',
+            building='South Wing',
             capacity=8,
             is_active=False,
         )

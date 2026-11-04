@@ -20,8 +20,8 @@ from rooms.views import login_page, register_page, study_room_list
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('', login_page, name='home'),
-    path('rooms/', study_room_list, name='login'),
+    path('', study_room_list, name='home'),
+    path('login/', login_page, name='login'),
     path('register/', register_page, name='register'),
     path('rooms/', study_room_list, name='study_room_list'),
     path('timetable-requests/', include('timetable_requests.urls')),

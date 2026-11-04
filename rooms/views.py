@@ -1,10 +1,10 @@
 from django.shortcuts import render
 
-from .models import StudyRoom
+from timetable_requests.models import Room
 
-# List all the available rooms 
+# List all the available rooms
 def study_room_list(request):
-    rooms = StudyRoom.objects.filter(is_active=True)
+    rooms = Room.objects.filter(is_active=True)
     return render(request, 'rooms/study_room_list.html', {'rooms': rooms})
 
 # vLogin page view
