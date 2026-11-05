@@ -1,6 +1,7 @@
 from django.contrib import admin, messages
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 
+from . import permissions
 from .models import (
     Programme,
     Room,
@@ -125,48 +126,51 @@ class TimetableRequestAdmin(admin.ModelAdmin):
             readonly += ['requester', 'programme']
         return readonly
 
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        if request.user.is_superuser:
+            return queryset
+        # Staff only see requests they submitted or review.
+        return queryset.filter(pk__in=permissions.visible_requests(request.user).values('pk'))
+
     # -- actions: these call the model's workflow methods ------------------
 
     actions = ('action_start_review', 'action_approve', 'action_reject', 'action_confirm_in_unitime')
 
-    def _run(self, request, queryset, method_name, success_label):
+    def _apply(self, request, queryset, operation, success_label):
+        """Run `operation(obj)` for each selected request, reporting per-request errors."""
         done = 0
         for obj in queryset:
             try:
-                getattr(obj, method_name)(request.user)
+                operation(obj)
                 done += 1
             except ValidationError as exc:
-                self.message_user(
-                    request, f'"{obj}": {" ".join(exc.messages)}', level=messages.ERROR
-                )
+                self.message_user(request, f'"{obj}": {" ".join(exc.messages)}', level=messages.ERROR)
+            except PermissionDenied as exc:
+                detail = str(exc) or 'You do not have permission to do that.'
+                self.message_user(request, f'"{obj}": {detail}', level=messages.ERROR)
         if done:
             self.message_user(request, f'{done} request(s) {success_label}.', level=messages.SUCCESS)
 
     @admin.action(description='Start review of selected requests')
     def action_start_review(self, request, queryset):
-        self._run(request, queryset, 'start_review', 'moved to review')
+        self._apply(request, queryset, lambda obj: obj.start_review(request.user), 'moved to review')
 
     @admin.action(description='Approve selected requests')
     def action_approve(self, request, queryset):
-        self._run(request, queryset, 'approve', 'approved')
+        self._apply(request, queryset, lambda obj: obj.approve(request.user), 'approved')
 
     @admin.action(description='Reject selected requests (uses the saved review notes)')
     def action_reject(self, request, queryset):
-        done = 0
-        for obj in queryset:
-            try:
-                obj.reject(request.user, note=obj.review_notes)
-                done += 1
-            except ValidationError as exc:
-                self.message_user(
-                    request, f'"{obj}": {" ".join(exc.messages)}', level=messages.ERROR
-                )
-        if done:
-            self.message_user(request, f'{done} request(s) rejected.', level=messages.SUCCESS)
+        self._apply(
+            request, queryset, lambda obj: obj.reject(request.user, note=obj.review_notes), 'rejected'
+        )
 
     @admin.action(description='Confirm selected requests as updated in UniTime')
     def action_confirm_in_unitime(self, request, queryset):
-        self._run(request, queryset, 'confirm_in_unitime', 'confirmed in UniTime')
+        self._apply(
+            request, queryset, lambda obj: obj.confirm_in_unitime(request.user), 'confirmed in UniTime'
+        )
 
 
 @admin.register(TimetableRequestHistory)
@@ -178,6 +182,12 @@ class TimetableRequestHistoryAdmin(admin.ModelAdmin):
     search_fields = ('request__title_or_subject', 'performed_by__username', 'note')
     date_hierarchy = 'created_at'
     list_select_related = ('request', 'performed_by')
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        if request.user.is_superuser:
+            return queryset
+        return queryset.filter(request__in=permissions.visible_requests(request.user).values('pk'))
 
     def has_add_permission(self, request):
         return False
