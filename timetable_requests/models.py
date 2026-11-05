@@ -1,7 +1,9 @@
 from django.conf import settings
-from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, PermissionDenied, ValidationError
 from django.db import models, transaction
 from django.utils import timezone
+
+from . import permissions
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +327,12 @@ class TimetableRequest(TimeStampedModel):
     # transition, fills the right audit fields, saves, and writes the history
     # row, all inside a single transaction.
 
+    @staticmethod
+    def _require(allowed, message):
+        """Raise PermissionDenied unless the permission check passed."""
+        if not allowed:
+            raise PermissionDenied(message)
+
     def _log(self, action, old_status, new_status, user, note=''):
         return TimetableRequestHistory.objects.create(
             request=self,
@@ -362,6 +370,10 @@ class TimetableRequest(TimeStampedModel):
         return self
 
     def start_review(self, user, note=''):
+        self._require(
+            permissions.can_review(user, self),
+            'Only a timetable manager or programme administrator for this programme can start a review.',
+        )
         return self._transition(
             self.STATUS_UNDER_REVIEW,
             TimetableRequestHistory.ACTION_REVIEW_STARTED,
@@ -372,6 +384,10 @@ class TimetableRequest(TimeStampedModel):
         )
 
     def request_clarification(self, user, note):
+        self._require(
+            permissions.can_review(user, self),
+            'Only a timetable manager or programme administrator for this programme can request clarification.',
+        )
         if not note or not note.strip():
             raise ValidationError('Explain what clarification is needed.')
         return self._transition(
@@ -383,6 +399,10 @@ class TimetableRequest(TimeStampedModel):
         )
 
     def receive_clarification(self, user, note=''):
+        self._require(
+            permissions.can_respond_to_clarification(user, self),
+            'Only the requester or a reviewer for this programme can record a clarification.',
+        )
         return self._transition(
             self.STATUS_UNDER_REVIEW,
             TimetableRequestHistory.ACTION_CLARIFICATION_RECEIVED,
@@ -391,6 +411,10 @@ class TimetableRequest(TimeStampedModel):
         )
 
     def approve(self, user, note=''):
+        self._require(
+            permissions.can_approve(user, self),
+            'Only a timetable manager or programme administrator for this programme can approve requests.',
+        )
         return self._transition(
             self.STATUS_APPROVED_PENDING_UPDATE,
             TimetableRequestHistory.ACTION_APPROVED,
@@ -401,6 +425,10 @@ class TimetableRequest(TimeStampedModel):
         )
 
     def reject(self, user, note):
+        self._require(
+            permissions.can_review(user, self),
+            'Only a timetable manager or programme administrator for this programme can reject requests.',
+        )
         return self._transition(
             self.STATUS_REJECTED,
             TimetableRequestHistory.ACTION_REJECTED,
@@ -412,6 +440,10 @@ class TimetableRequest(TimeStampedModel):
         )
 
     def confirm_in_unitime(self, user, note=''):
+        self._require(
+            permissions.can_confirm_in_unitime(user, self),
+            'Only a timetable manager for this programme can confirm a UniTime update.',
+        )
         return self._transition(
             self.STATUS_CONFIRMED_IN_UNITIME,
             TimetableRequestHistory.ACTION_UNITIME_UPDATE_CONFIRMED,
@@ -423,8 +455,7 @@ class TimetableRequest(TimeStampedModel):
         )
 
     def cancel(self, user, note=''):
-        if user.pk != self.requester_id:
-            raise ValidationError('Only the requester can cancel a request.')
+        self._require(permissions.can_cancel(user, self), 'Only the requester can cancel a request.')
         return self._transition(
             self.STATUS_CANCELLED,
             TimetableRequestHistory.ACTION_CANCELLED,
@@ -435,6 +466,10 @@ class TimetableRequest(TimeStampedModel):
     @transaction.atomic
     def select_alternative_room(self, room, user, notes=''):
         """Record the chosen alternative room. This is not a status change."""
+        self._require(
+            permissions.can_review(user, self),
+            'Only a timetable manager or programme administrator for this programme can select a room.',
+        )
         if self.status not in self.ROOM_SELECTABLE_STATUSES:
             raise ValidationError('A room can only be selected while the request is under review or approved.')
         self.alternative_room_selected = room
