@@ -45,6 +45,22 @@ def can_submit(user, programme):
     return has_active_role(user, programme.pk, (_roles().ROLE_LECTURER,))
 
 
+def submittable_programmes(user):
+    """Active programmes this user may submit requests for (lecturer assignments)."""
+    from .models import Programme
+
+    programmes = Programme.objects.filter(is_active=True)
+    if not _is_authenticated(user):
+        return programmes.none()
+    if user.is_superuser:
+        return programmes
+
+    lecturer_programmes = user.programme_assignments.filter(
+        is_active=True, role=_roles().ROLE_LECTURER
+    ).values('programme_id')
+    return programmes.filter(pk__in=lecturer_programmes)
+
+
 # -- reviewing ---------------------------------------------------------------
 
 def can_review(user, timetable_request):
