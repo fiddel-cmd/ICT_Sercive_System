@@ -1,29 +1,20 @@
-<!doctype html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Submit Timetable Request</title>
-</head>
-<body>
-    <main>
-        <h1>Submit timetable request</h1>
+{% extends "timetable_requests/base.html" %}
 
-        {% if messages %}
-            <ul>
-                {% for message in messages %}
-                    <li>{{ message }}</li>
-                {% endfor %}
-            </ul>
-        {% endif %}
+{% block title %}Submit Timetable Request{% endblock %}
 
+{% block content %}
+    <h1>Submit timetable request</h1>
+
+    {% if form %}
         <form method="post">
             {% csrf_token %}
             {{ form.as_p }}
             <button type="submit">Submit request</button>
         </form>
+    {% else %}
+        <p>You are not assigned as a lecturer on any active programme, so you cannot submit requests.
+           Please contact your programme administrator.</p>
+    {% endif %}
 
-        <p><a href="{% url 'timetable_request_home' %}">Back to timetable requests</a></p>
-    </main>
-</body>
-</html>
+    <p><a href="{% url 'timetable_request_home' %}">Back to timetable requests</a></p>
+{% endblock %}

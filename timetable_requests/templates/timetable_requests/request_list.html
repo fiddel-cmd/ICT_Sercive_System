@@ -1,0 +1,46 @@
+{% extends "timetable_requests/base.html" %}
+
+{% block title %}My Requests{% endblock %}
+
+{% block content %}
+    <h1>My requests</h1>
+
+    {% if timetable_requests %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Request</th>
+                    <th>Programme</th>
+                    <th>Type</th>
+                    <th>Lecture</th>
+                    <th>Status</th>
+                    <th>Submitted</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in timetable_requests %}
+                    <tr>
+                        <td>{{ item.title_or_subject }}</td>
+                        <td>{{ item.programme.code }}</td>
+                        <td>{{ item.get_request_type_display }}</td>
+                        <td>{{ item.lecture_date|date:"j M Y" }}, {{ item.lecture_start_time|time:"H:i" }}&ndash;{{ item.lecture_end_time|time:"H:i" }}</td>
+                        <td><span class="badge badge-{{ item.status }}">{{ item.get_status_display }}</span></td>
+                        <td>{{ item.submitted_at|date:"j M Y" }}</td>
+                        <td>
+                            {% if item.is_cancellable %}
+                                <form class="inline" method="post" action="{% url 'timetable_request_cancel' item.pk %}"
+                                      onsubmit="return confirm('Cancel this request?');">
+                                    {% csrf_token %}
+                                    <button type="submit">Cancel</button>
+                                </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p>You haven't submitted any requests yet. <a href="{% url 'timetable_request_create' %}">Submit one now</a>.</p>
+    {% endif %}
+{% endblock %}

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Timetable Requests{% endblock %}</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 0; color: #1f2937; }
+        nav { background: #1f2937; padding: .75rem 1.5rem; display: flex; gap: 1.25rem; align-items: center; }
+        nav a { color: #fff; text-decoration: none; }
+        nav .spacer { flex: 1; }
+        nav .who { color: #9ca3af; font-size: .9rem; }
+        main { max-width: 64rem; margin: 1.5rem auto; padding: 0 1rem; }
+        .messages { list-style: none; padding: 0; }
+        .messages li { padding: .6rem .9rem; border-radius: 4px; margin-bottom: .5rem; background: #e5e7eb; }
+        .messages .success { background: #d1fae5; }
+        .messages .error { background: #fee2e2; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid #e5e7eb; }
+        .badge { display: inline-block; padding: .1rem .5rem; border-radius: 999px; background: #e5e7eb; font-size: .85rem; }
+        .badge-pending_review, .badge-under_review, .badge-needs_clarification { background: #fef3c7; }
+        .badge-approved_pending_update, .badge-confirmed_in_unitime { background: #d1fae5; }
+        .badge-rejected, .badge-cancelled { background: #fee2e2; }
+        form.inline { display: inline; }
+    </style>
+</head>
+<body>
+    <nav>
+        <a href="{% url 'timetable_request_home' %}">Timetable Requests</a>
+        <a href="{% url 'timetable_request_create' %}">Submit a request</a>
+        <a href="{% url 'timetable_request_list' %}">My requests</a>
+        <span class="spacer"></span>
+        {% if user.is_authenticated %}<span class="who">{{ user.get_username }}</span>{% endif %}
+    </nav>
+    <main>
+        {% if messages %}
+            <ul class="messages">
+                {% for message in messages %}
+                    <li class="{{ message.tags }}">{{ message }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

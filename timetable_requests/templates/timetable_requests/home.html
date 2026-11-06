@@ -1,15 +1,12 @@
-<!doctype html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Timetable Requests</title>
-</head>
-<body>
-    <main>
-        <h1>Timetable Requests</h1>
-        <p>Timetable request management is ready for the first milestone.</p>
-        <p><a href="{% url 'timetable_request_create' %}">Submit a new request</a></p>
-    </main>
-</body>
-</html>
+{% extends "timetable_requests/base.html" %}
+
+{% block title %}Timetable Requests{% endblock %}
+
+{% block content %}
+    <h1>Timetable Requests</h1>
+    <p>Request a room change, a makeup class or a timetable adjustment, and follow its progress.</p>
+    <p>
+        <a href="{% url 'timetable_request_create' %}">Submit a new request</a> &middot;
+        <a href="{% url 'timetable_request_list' %}">View my requests</a>
+    </p>
+{% endblock %}
