@@ -1,10 +1,11 @@
 import datetime
 
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.test import TestCase
 from django.urls import reverse
 
+from . import permissions
 from .models import (
     Programme,
     Room,
@@ -30,6 +31,16 @@ class BaseTimetableTestCase(TestCase):
             capacity=60,
         )
         self.other_room = Room.objects.create(code='B-202', name='Lab B', building='Tech Block', capacity=40)
+
+        # The lecturer submits; the manager reviews, approves and confirms.
+        StaffProgrammeAssignment.objects.create(
+            user=self.user, programme=self.programme, role=StaffProgrammeAssignment.ROLE_LECTURER
+        )
+        StaffProgrammeAssignment.objects.create(
+            user=self.manager,
+            programme=self.programme,
+            role=StaffProgrammeAssignment.ROLE_TIMETABLE_MANAGER,
+        )
 
     def make_request(self, **overrides):
         data = dict(
@@ -258,7 +269,7 @@ class TimetableRequestWorkflowTests(BaseTimetableTestCase):
 
     def test_only_requester_can_cancel(self):
         request = self.make_request()
-        with self.assertRaises(ValidationError):
+        with self.assertRaises(PermissionDenied):
             request.cancel(self.manager)
 
         request.cancel(self.user, note='No longer needed.')
@@ -298,11 +309,6 @@ class StaffProgrammeAssignmentTests(BaseTimetableTestCase):
     def test_same_role_cannot_be_assigned_twice(self):
         from django.db import IntegrityError, transaction
 
-        StaffProgrammeAssignment.objects.create(
-            user=self.manager,
-            programme=self.programme,
-            role=StaffProgrammeAssignment.ROLE_TIMETABLE_MANAGER,
-        )
         with self.assertRaises(IntegrityError), transaction.atomic():
             StaffProgrammeAssignment.objects.create(
                 user=self.manager,
@@ -313,11 +319,6 @@ class StaffProgrammeAssignmentTests(BaseTimetableTestCase):
     def test_user_can_hold_different_roles_on_same_programme(self):
         StaffProgrammeAssignment.objects.create(
             user=self.manager, programme=self.programme, role=StaffProgrammeAssignment.ROLE_LECTURER
-        )
-        StaffProgrammeAssignment.objects.create(
-            user=self.manager,
-            programme=self.programme,
-            role=StaffProgrammeAssignment.ROLE_TIMETABLE_MANAGER,
         )
         self.assertEqual(self.manager.programme_assignments.count(), 2)
 
@@ -366,3 +367,201 @@ class AdminSmokeTests(BaseTimetableTestCase):
         self.assertTrue(
             self.request_obj.history.filter(action=TimetableRequestHistory.ACTION_REVIEW_STARTED).exists()
         )
+
+
+# ---------------------------------------------------------------------------
+# Permissions
+# ---------------------------------------------------------------------------
+
+class WorkflowPermissionTests(BaseTimetableTestCase):
+    def setUp(self):
+        super().setUp()
+        A = StaffProgrammeAssignment
+
+        self.outsider = User.objects.create_user(username='outsider', password='secret12345')
+
+        self.programme_admin = User.objects.create_user(username='progadmin', password='secret12345')
+        A.objects.create(user=self.programme_admin, programme=self.programme, role=A.ROLE_PROGRAMME_ADMINISTRATOR)
+
+        self.other_programme = Programme.objects.create(code='BIT', name='Business IT')
+        self.other_manager = User.objects.create_user(username='othermanager', password='secret12345')
+        A.objects.create(user=self.other_manager, programme=self.other_programme, role=A.ROLE_TIMETABLE_MANAGER)
+
+        self.inactive_manager = User.objects.create_user(username='inactive', password='secret12345')
+        A.objects.create(
+            user=self.inactive_manager,
+            programme=self.programme,
+            role=A.ROLE_TIMETABLE_MANAGER,
+            is_active=False,
+        )
+
+        self.superuser = User.objects.create_superuser(
+            username='root', email='root@example.com', password='secret12345'
+        )
+        self.request_obj = self.make_request()
+
+    def assertDenied(self, call, user):
+        """The call must raise PermissionDenied and leave status and history untouched."""
+        status_before = TimetableRequest.objects.get(pk=self.request_obj.pk).status
+        history_before = self.request_obj.history.count()
+
+        with self.assertRaises(PermissionDenied):
+            call(user)
+
+        self.request_obj.refresh_from_db()
+        self.assertEqual(self.request_obj.status, status_before)
+        self.assertEqual(self.request_obj.history.count(), history_before)
+
+    # -- start review ------------------------------------------------------
+
+    def test_start_review_denied_for_unauthorised_users(self):
+        for label, user in [
+            ('lecturer', self.user),
+            ('outsider', self.outsider),
+            ('manager of another programme', self.other_manager),
+            ('inactive manager', self.inactive_manager),
+        ]:
+            with self.subTest(user=label):
+                self.assertDenied(lambda u: self.request_obj.start_review(u), user)
+
+    def test_start_review_allowed_for_manager_and_programme_admin(self):
+        self.request_obj.start_review(self.manager)
+        self.assertEqual(self.request_obj.status, TimetableRequest.STATUS_UNDER_REVIEW)
+
+        other = self.make_request(title_or_subject='Second request')
+        other.start_review(self.programme_admin)
+        self.assertEqual(other.status, TimetableRequest.STATUS_UNDER_REVIEW)
+
+    def test_superuser_can_start_review(self):
+        self.request_obj.start_review(self.superuser)
+        self.assertEqual(self.request_obj.status, TimetableRequest.STATUS_UNDER_REVIEW)
+
+    # -- approve / reject --------------------------------------------------
+
+    def test_lecturer_cannot_approve_own_request(self):
+        self.request_obj.start_review(self.manager)
+        self.assertDenied(lambda u: self.request_obj.approve(u), self.user)
+
+    def test_manager_of_another_programme_cannot_approve(self):
+        self.request_obj.start_review(self.manager)
+        self.assertDenied(lambda u: self.request_obj.approve(u), self.other_manager)
+
+    def test_programme_admin_can_approve_and_reject(self):
+        self.request_obj.start_review(self.manager)
+        self.request_obj.approve(self.programme_admin)
+        self.assertEqual(self.request_obj.status, TimetableRequest.STATUS_APPROVED_PENDING_UPDATE)
+
+        second = self.make_request(title_or_subject='Second request')
+        second.start_review(self.manager)
+        second.reject(self.programme_admin, note='No rooms free.')
+        self.assertEqual(second.status, TimetableRequest.STATUS_REJECTED)
+
+    def test_reject_denied_for_lecturer(self):
+        self.request_obj.start_review(self.manager)
+        self.assertDenied(lambda u: self.request_obj.reject(u, note='Nope'), self.user)
+
+    # -- confirm in UniTime ------------------------------------------------
+
+    def test_programme_admin_cannot_confirm_in_unitime(self):
+        self.request_obj.start_review(self.manager)
+        self.request_obj.approve(self.manager)
+        self.assertDenied(lambda u: self.request_obj.confirm_in_unitime(u), self.programme_admin)
+
+    def test_manager_can_confirm_in_unitime(self):
+        self.request_obj.start_review(self.manager)
+        self.request_obj.approve(self.manager)
+        self.request_obj.confirm_in_unitime(self.manager)
+        self.assertEqual(self.request_obj.status, TimetableRequest.STATUS_CONFIRMED_IN_UNITIME)
+
+    # -- clarification, rooms, cancel -------------------------------------
+
+    def test_request_clarification_denied_for_lecturer(self):
+        self.request_obj.start_review(self.manager)
+        self.assertDenied(lambda u: self.request_obj.request_clarification(u, note='?'), self.user)
+
+    def test_outsider_cannot_answer_clarification(self):
+        self.request_obj.start_review(self.manager)
+        self.request_obj.request_clarification(self.manager, note='Which group?')
+        self.assertDenied(lambda u: self.request_obj.receive_clarification(u, note='B'), self.outsider)
+
+    def test_select_room_denied_for_lecturer(self):
+        self.request_obj.start_review(self.manager)
+        self.assertDenied(
+            lambda u: self.request_obj.select_alternative_room(self.other_room, u), self.user
+        )
+
+    def test_only_requester_can_cancel(self):
+        self.assertDenied(lambda u: self.request_obj.cancel(u), self.programme_admin)
+        self.request_obj.cancel(self.user)
+        self.assertEqual(self.request_obj.status, TimetableRequest.STATUS_CANCELLED)
+
+    # -- anonymous ---------------------------------------------------------
+
+    def test_anonymous_user_is_denied(self):
+        from django.contrib.auth.models import AnonymousUser
+
+        self.assertDenied(lambda u: self.request_obj.start_review(u), AnonymousUser())
+
+
+class PermissionHelperTests(BaseTimetableTestCase):
+    def setUp(self):
+        super().setUp()
+        self.outsider = User.objects.create_user(username='outsider', password='secret12345')
+        self.other_programme = Programme.objects.create(code='BIT', name='Business IT')
+        self.other_manager = User.objects.create_user(username='othermanager', password='secret12345')
+        StaffProgrammeAssignment.objects.create(
+            user=self.other_manager,
+            programme=self.other_programme,
+            role=StaffProgrammeAssignment.ROLE_TIMETABLE_MANAGER,
+        )
+        self.request_obj = self.make_request()
+
+    def test_can_submit_requires_lecturer_role(self):
+        self.assertTrue(permissions.can_submit(self.user, self.programme))
+        self.assertFalse(permissions.can_submit(self.manager, self.programme))
+        self.assertFalse(permissions.can_submit(self.outsider, self.programme))
+        self.assertFalse(permissions.can_submit(self.user, self.other_programme))
+
+    def test_can_view(self):
+        self.assertTrue(permissions.can_view(self.user, self.request_obj))      # requester
+        self.assertTrue(permissions.can_view(self.manager, self.request_obj))   # reviewer
+        self.assertFalse(permissions.can_view(self.outsider, self.request_obj))
+        self.assertFalse(permissions.can_view(self.other_manager, self.request_obj))
+
+    def test_visible_requests_scoping(self):
+        elsewhere = self.make_request(
+            programme=self.other_programme, title_or_subject='Other programme request'
+        )
+        # The lecturer submitted both, so sees both; managers see only their own programme.
+        self.assertEqual(set(permissions.visible_requests(self.user)), {self.request_obj, elsewhere})
+        self.assertEqual(set(permissions.visible_requests(self.manager)), {self.request_obj})
+        self.assertEqual(set(permissions.visible_requests(self.other_manager)), {elsewhere})
+        self.assertFalse(permissions.visible_requests(self.outsider).exists())
+
+
+class AdminPermissionTests(BaseTimetableTestCase):
+    def setUp(self):
+        super().setUp()
+        self.request_obj = self.make_request()
+        self.lecturer_admin = self.user  # a lecturer who happens to have admin access
+        self.lecturer_admin.is_staff = True
+        self.lecturer_admin.save()
+
+    def test_action_by_unauthorised_staff_shows_error_and_changes_nothing(self):
+        from django.contrib.auth.models import Permission
+
+        self.lecturer_admin.user_permissions.add(
+            *Permission.objects.filter(content_type__app_label='timetable_requests')
+        )
+        self.client.force_login(self.lecturer_admin)
+
+        response = self.client.post(
+            reverse('admin:timetable_requests_timetablerequest_changelist'),
+            {'action': 'action_start_review', '_selected_action': [self.request_obj.pk]},
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Only a timetable manager or programme administrator')
+
+        self.request_obj.refresh_from_db()
+        self.assertEqual(self.request_obj.status, TimetableRequest.STATUS_PENDING_REVIEW)
