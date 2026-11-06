@@ -1,9 +1,12 @@
 from django import forms
 
-from .models import Programme, Room, TimetableRequest
+from . import permissions
+from .models import Room, TimetableRequest
 
 
 class TimetableRequestForm(forms.ModelForm):
+    """Submission form. Pass `user=request.user` so the programme list is restricted."""
+
     class Meta:
         model = TimetableRequest
         fields = [
@@ -31,8 +34,12 @@ class TimetableRequestForm(forms.ModelForm):
             'proposed_end_time': forms.TimeInput(attrs={'type': 'time'}),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['programme'].queryset = Programme.objects.filter(is_active=True)
+        self.user = user
+        # Only programmes where the user is an active lecturer are valid choices,
+        # so a forged POST for any other programme fails validation.
+        self.fields['programme'].queryset = permissions.submittable_programmes(user)
         self.fields['original_room'].queryset = Room.objects.filter(is_active=True)
         self.fields['preferred_alternative_room'].queryset = Room.objects.filter(is_active=True)
+        
