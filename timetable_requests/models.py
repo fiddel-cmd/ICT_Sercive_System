@@ -248,6 +248,10 @@ class TimetableRequest(TimeStampedModel):
     def can_transition_to(self, new_status):
         return new_status in self.ALLOWED_TRANSITIONS.get(self.status, set())
 
+    @property
+    def is_cancellable(self):
+        return self.can_transition_to(self.STATUS_CANCELLED)
+
     # -- validation ---------------------------------------------------------
 
     def clean(self):

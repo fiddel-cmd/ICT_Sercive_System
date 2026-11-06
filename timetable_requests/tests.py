@@ -565,3 +565,155 @@ class AdminPermissionTests(BaseTimetableTestCase):
 
         self.request_obj.refresh_from_db()
         self.assertEqual(self.request_obj.status, TimetableRequest.STATUS_PENDING_REVIEW)
+
+
+# ---------------------------------------------------------------------------
+# Submitting requests (views)
+# ---------------------------------------------------------------------------
+
+class SubmitFlowTests(BaseTimetableTestCase):
+    def setUp(self):
+        super().setUp()
+        self.other_programme = Programme.objects.create(code='BIT', name='Business IT')
+        self.outsider = User.objects.create_user(username='outsider', password='secret12345')
+        self.url = reverse('timetable_request_create')
+
+    def form_data(self, **overrides):
+        data = {
+            'programme': self.programme.pk,
+            'request_type': TimetableRequest.REQUEST_TYPE_ROOM_CHANGE,
+            'title_or_subject': 'Room change for CS101 lecture',
+            'course_code': 'CS101',
+            'course_name': 'Introduction to Programming',
+            'lecture_date': '2026-11-20',
+            'lecture_start_time': '09:00',
+            'lecture_end_time': '10:30',
+            'original_room': self.room.pk,
+            'preferred_alternative_room': self.other_room.pk,
+            'reason': 'The assigned room is too small for the class size.',
+        }
+        data.update(overrides)
+        return data
+
+    def test_login_required(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('next=', response['Location'])
+
+    def test_programme_choices_limited_to_assigned_programmes(self):
+        self.client.force_login(self.user)
+        response = self.client.get(self.url)
+        self.assertEqual(list(response.context['form'].fields['programme'].queryset), [self.programme])
+
+    def test_cannot_submit_to_unassigned_programme(self):
+        self.client.force_login(self.user)
+        response = self.client.post(self.url, self.form_data(programme=self.other_programme.pk))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('programme', response.context['form'].errors)
+        self.assertEqual(TimetableRequest.objects.count(), 0)
+
+    def test_user_without_lecturer_role_is_forbidden(self):
+        for label, user in [('outsider', self.outsider), ('manager', self.manager)]:
+            with self.subTest(user=label):
+                self.client.force_login(user)
+                self.assertEqual(self.client.get(self.url).status_code, 403)
+                self.assertEqual(self.client.post(self.url, self.form_data()).status_code, 403)
+        self.assertEqual(TimetableRequest.objects.count(), 0)
+
+    def test_inactive_programme_is_not_offered(self):
+        self.programme.is_active = False
+        self.programme.save()
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+
+    def test_requester_cannot_be_spoofed(self):
+        self.client.force_login(self.user)
+        self.client.post(self.url, self.form_data(requester=self.manager.pk, status='approved_pending_update'))
+        created = TimetableRequest.objects.get()
+        self.assertEqual(created.requester, self.user)
+        self.assertEqual(created.status, TimetableRequest.STATUS_PENDING_REVIEW)
+
+    def test_successful_submission_redirects_to_my_requests_and_logs_history(self):
+        self.client.force_login(self.user)
+        response = self.client.post(self.url, self.form_data())
+        self.assertRedirects(response, reverse('timetable_request_list'))
+        created = TimetableRequest.objects.get()
+        self.assertEqual(created.history.get().action, TimetableRequestHistory.ACTION_SUBMITTED)
+
+    def test_invalid_makeup_request_shows_errors_and_saves_nothing(self):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            self.url, self.form_data(request_type=TimetableRequest.REQUEST_TYPE_MAKEUP_CLASS)
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('proposed_date', response.context['form'].errors)
+        self.assertEqual(TimetableRequest.objects.count(), 0)
+
+
+# ---------------------------------------------------------------------------
+# My requests and cancel (views)
+# ---------------------------------------------------------------------------
+
+class MyRequestsTests(BaseTimetableTestCase):
+    def setUp(self):
+        super().setUp()
+        self.list_url = reverse('timetable_request_list')
+        self.mine = self.make_request(title_or_subject='My own request')
+        self.theirs = self.make_request(requester=self.manager, title_or_subject='Manager request')
+
+    def cancel_url(self, obj):
+        return reverse('timetable_request_cancel', args=[obj.pk])
+
+    def test_login_required(self):
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('next=', response['Location'])
+
+    def test_list_shows_only_own_requests(self):
+        self.client.force_login(self.user)
+        response = self.client.get(self.list_url)
+        self.assertContains(response, 'My own request')
+        self.assertNotContains(response, 'Manager request')
+
+    def test_empty_state(self):
+        outsider = User.objects.create_user(username='outsider', password='secret12345')
+        self.client.force_login(outsider)
+        self.assertContains(self.client.get(self.list_url), "haven't submitted any requests")
+
+    def test_cancel_own_pending_request(self):
+        self.client.force_login(self.user)
+        response = self.client.post(self.cancel_url(self.mine))
+        self.assertRedirects(response, self.list_url)
+
+        self.mine.refresh_from_db()
+        self.assertEqual(self.mine.status, TimetableRequest.STATUS_CANCELLED)
+        self.assertTrue(self.mine.history.filter(action=TimetableRequestHistory.ACTION_CANCELLED).exists())
+
+    def test_cannot_cancel_someone_elses_request(self):
+        self.client.force_login(self.user)
+        response = self.client.post(self.cancel_url(self.theirs))
+        self.assertEqual(response.status_code, 404)
+        self.theirs.refresh_from_db()
+        self.assertEqual(self.theirs.status, TimetableRequest.STATUS_PENDING_REVIEW)
+
+    def test_cancel_requires_post(self):
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get(self.cancel_url(self.mine)).status_code, 405)
+
+    def test_cannot_cancel_after_a_decision(self):
+        self.mine.start_review(self.manager)
+        self.mine.reject(self.manager, note='No rooms free.')
+
+        self.client.force_login(self.user)
+        response = self.client.post(self.cancel_url(self.mine), follow=True)
+        self.assertContains(response, 'cannot move')
+        self.mine.refresh_from_db()
+        self.assertEqual(self.mine.status, TimetableRequest.STATUS_REJECTED)
+
+    def test_cancel_button_only_shown_for_cancellable_requests(self):
+        self.client.force_login(self.user)
+        self.assertContains(self.client.get(self.list_url), self.cancel_url(self.mine))
+
+        self.mine.start_review(self.manager)
+        self.mine.reject(self.manager, note='No rooms free.')
+        self.assertNotContains(self.client.get(self.list_url), self.cancel_url(self.mine))
